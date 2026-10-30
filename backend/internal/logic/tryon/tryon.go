@@ -49,9 +49,10 @@ func DoTryonWithClientConfig(ctx context.Context, personB64, garmentB64, model, 
 	}
 
 	// 构建提示词：
-	// 1. GPT-Image-2 专门使用防封控安全提示词；
+	// 1. GPT-Image 系列专门使用防封控安全提示词；
 	// 2. Gemini 保留原英文稳定提示词；
-	// 3. 豆包等其他模型保留原提示词（按语言选择）。
+	// 3. 豆包 / MiniMax 等其他模型保留原提示词（按语言选择）。
+	//    MiniMax 走「视觉描述 → 文生图」，最终提示词由适配器内部拼装。
 	var promptStr string
 	isGemini := (clientConfig != nil && strings.EqualFold(clientConfig.Provider, "gemini")) || gen.Name() == "gemini"
 	if isGPTImageModel(model, clientConfig, gen.Name()) {
@@ -59,6 +60,8 @@ func DoTryonWithClientConfig(ctx context.Context, personB64, garmentB64, model, 
 	} else if isGemini {
 		promptStr = BuildGemini(lang)
 	} else {
+		// 豆包 / MiniMax 等其他模型使用通用提示词。
+		// MiniMax 适配器内部会再拼装「视觉描述 + 约束」后的最终提示词。
 		promptStr = BuildDefault(lang)
 	}
 

@@ -28,6 +28,9 @@ type ModelConfig struct {
 	BaseURL  string // 接口地址（可配置，支持第三方/国内服务商）
 	Model    string // 服务商侧真实模型名
 	EnvKey   string // 覆盖用的环境变量名
+	// VisionModel 可选的视觉模型名。仅部分协议（如 minimax）需要：先读两张参考图生成视觉描述，
+	// 再用描述做文生图。留空时由适配器自己选默认值。
+	VisionModel string
 	// ComfyUI 固定工作流配置。路径和节点映射只允许来自服务端配置，避免公网后端访问用户指定的内网地址。
 	WorkflowPath   string
 	PersonNode     string
@@ -53,6 +56,7 @@ func loadModelConfig(ctx context.Context, alias string) (*ModelConfig, error) {
 		BaseURL:        g.Cfg().MustGet(ctx, prefix+".baseURL", "").String(),
 		Model:          g.Cfg().MustGet(ctx, prefix+".model", "").String(),
 		EnvKey:         g.Cfg().MustGet(ctx, prefix+".envKey", "").String(),
+		VisionModel:    g.Cfg().MustGet(ctx, prefix+".visionModel", "").String(),
 		WorkflowPath:   g.Cfg().MustGet(ctx, prefix+".workflowPath", "").String(),
 		PersonNode:     g.Cfg().MustGet(ctx, prefix+".personNode", "").String(),
 		GarmentNode:    g.Cfg().MustGet(ctx, prefix+".garmentNode", "").String(),
@@ -141,6 +145,7 @@ func NewGeneratorFromClientConfig(cfg *ModelConfig) (ImageGenerator, error) {
 		APIKey:         strings.TrimSpace(cfg.APIKey),
 		BaseURL:        strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/"),
 		Model:          strings.TrimSpace(cfg.Model),
+		VisionModel:    strings.TrimSpace(cfg.VisionModel),
 		ClientProvided: true,
 	}
 	if err := validateClientModelConfig(clean); err != nil {
@@ -203,6 +208,8 @@ func newGeneratorFromConfig(cfg *ModelConfig) (ImageGenerator, error) {
 		return NewOpenAIImages(cfg), nil
 	case "gemini", "google":
 		return NewGemini(cfg), nil
+	case "minimax":
+		return NewMiniMax(cfg), nil
 	case "comfyui":
 		return NewComfyUI(cfg), nil
 	default:
@@ -211,7 +218,7 @@ func newGeneratorFromConfig(cfg *ModelConfig) (ImageGenerator, error) {
 }
 
 func validateClientModelConfig(cfg *ModelConfig) error {
-	if cfg.Provider != "openai" && cfg.Provider != "doubao" && cfg.Provider != "gemini" {
+	if cfg.Provider != "openai" && cfg.Provider != "doubao" && cfg.Provider != "gemini" && cfg.Provider != "minimax" {
 		return fmt.Errorf("不支持的协议类型")
 	}
 	if cfg.APIKey == "" || len(cfg.APIKey) > 4096 {
