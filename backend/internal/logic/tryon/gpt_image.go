@@ -22,6 +22,9 @@ type OpenAIImages struct {
 	model   string
 	name    string
 	client  *http.Client
+	// usedPrompt 记录本次实际发给模型的提示词（GPT-Image 分支会自行拼装）。
+	// 每个请求都会新建一个适配器实例，因此不存在并发竞争。
+	usedPrompt string
 }
 
 // NewOpenAIImages 从配置创建适配器
@@ -36,6 +39,11 @@ func NewOpenAIImages(cfg *ModelConfig) *OpenAIImages {
 }
 
 func (o *OpenAIImages) Name() string { return o.name }
+
+// UsedPrompt 返回本次实际发给模型的提示词。
+func (o *OpenAIImages) UsedPrompt() string {
+	return o.usedPrompt
+}
 
 // gptImageRequest 图片生成请求体。
 // 同时兼容两种协议：
@@ -198,6 +206,7 @@ func (o *OpenAIImages) Generate(ctx context.Context, personB64, garmentB64, prom
 			prompt = fmt.Sprintf("Full-body commercial fashion catalog photograph:\n%s\nStrict requirements:\n1. The adult female model from Image 1 is wearing the complete outfit from Image 2 faithfully.\n2. Fully clothed, modest neckline, standard comfortable fit, elegant posture.\n3. Clean daylight studio, neutral minimal background, photorealistic 8k, crisp fabric textures.\nOutput: ONLY the final dressed-up photograph.", visualDesc)
 		}
 	}
+	o.usedPrompt = prompt
 
 	// 换装场景需要「人像 + 服装」两张参考图。
 	// 绝大多数 OpenAI 兼容中转站（含用户的中转站 cpa.paipiange.com）对 gpt-image-2 走

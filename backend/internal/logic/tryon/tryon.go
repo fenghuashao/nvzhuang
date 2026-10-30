@@ -52,7 +52,7 @@ func DoTryonWithClientConfig(ctx context.Context, personB64, garmentB64, model, 
 	// 1. GPT-Image 系列专门使用防封控安全提示词；
 	// 2. Gemini 保留原英文稳定提示词；
 	// 3. 豆包 / MiniMax 等其他模型保留原提示词（按语言选择）。
-	//    MiniMax 走「视觉描述 → 文生图」，最终提示词由适配器内部拼装。
+	//    MiniMax 走「人像 subject_reference + 纯服装描述」，最终提示词由适配器内部拼装。
 	var promptStr string
 	isGemini := (clientConfig != nil && strings.EqualFold(clientConfig.Provider, "gemini")) || gen.Name() == "gemini"
 	if isGPTImageModel(model, clientConfig, gen.Name()) {
@@ -61,7 +61,7 @@ func DoTryonWithClientConfig(ctx context.Context, personB64, garmentB64, model, 
 		promptStr = BuildGemini(lang)
 	} else {
 		// 豆包 / MiniMax 等其他模型使用通用提示词。
-		// MiniMax 适配器内部会再拼装「视觉描述 + 约束」后的最终提示词。
+		// MiniMax 适配器内部会再拼装「身份描述 + 服装描述」后的最终提示词。
 		promptStr = BuildDefault(lang)
 	}
 
@@ -72,7 +72,19 @@ func DoTryonWithClientConfig(ctx context.Context, personB64, garmentB64, model, 
 		return "", "", "", gerror.Wrap(err, "换装生成失败，请稍后重试")
 	}
 
-	return result, gen.Name(), promptStr, nil
+	return result, gen.Name(), resolveUsedPrompt(gen, promptStr), nil
+}
+
+// resolveUsedPrompt 返回实际发给模型的提示词。
+// 部分适配器（如 MiniMax）会在生成过程中自行拼装最终提示词，
+// 若直接返回构建阶段的模板，接口返回的 prompt 与真实提示词不符，排查时极具误导性。
+func resolveUsedPrompt(gen ImageGenerator, fallback string) string {
+	if reporter, ok := gen.(PromptReporter); ok {
+		if used := reporter.UsedPrompt(); used != "" {
+			return used
+		}
+	}
+	return fallback
 }
 
 // DoTryonWithValidatedImages 使用已完成安全校验的图片结构执行换装
@@ -116,7 +128,7 @@ func DoTryonWithValidatedImages(ctx context.Context, personImg, garmentImg *imag
 		return "", "", "", gerror.Wrap(err, "换装生成失败，请稍后重试")
 	}
 
-	return result, gen.Name(), promptStr, nil
+	return result, gen.Name(), resolveUsedPrompt(gen, promptStr), nil
 }
 
 // isGPTImageModel 判断当前请求是否使用 GPT-Image 系列模型

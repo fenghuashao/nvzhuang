@@ -13,8 +13,6 @@ type TryonReq struct {
 	Model string `json:"model" d:"gemini" dc:"模型别名：gemini / gpt-image / doubao（可在 config.yaml 扩展）"`
 	// 生成尺寸：1024x1024 / 1024x1536 / 1536x1024
 	Size string `json:"size" d:"1024x1536" dc:"输出尺寸"`
-	// 是否保留人物面部（保持同一个人）
-	KeepFace bool `json:"keep_face" d:"true" dc:"是否保持人物面部一致"`
 	// 语言：zh / en
 	Lang string `json:"lang" d:"zh" dc:"提示词语言"`
 	// 浏览器端自定义模型配置。仅用于当前请求，后端不得持久化或记录其中的 Key/Base URL。

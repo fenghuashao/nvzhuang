@@ -20,6 +20,13 @@ type ImageGenerator interface {
 	Name() string
 }
 
+// PromptReporter 可选接口：适配器若能在生成后给出「实际发给模型的提示词」，
+// 则实现它。没有实现该接口的适配器会退回返回构建阶段的模板提示词。
+type PromptReporter interface {
+	// UsedPrompt 返回本次实际使用的提示词
+	UsedPrompt() string
+}
+
 // ModelConfig 单个模型的配置项
 type ModelConfig struct {
 	Name     string // 模型别名（前端请求用），如 gpt-image / doubao / gemini

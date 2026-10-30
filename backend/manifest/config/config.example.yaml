@@ -113,14 +113,16 @@ llm:
       model: "doubao-seedream-3-0-t2i-250415"
 
     # MiniMax（image-01 系列）—— 国内可用
-    # 说明：MiniMax 图生图只接受 **一张** 参考图，换装走「视觉描述 → 文生图」链路。
+    # 说明：MiniMax 图生图只接受 **一张** 参考图（传两张返回 2013 "image_reference must be one"）。
+    # 换装链路：人像走 subject_reference 传入，服装由视觉模型转成「纯服装描述」后写进提示词。
+    # 注意：服装描述里若混入人物主语，image-01 会画出两个人（人像 + 穿好衣的人）。
     minimax:
       provider: minimax         # MiniMax 原生协议（/v1/image_generation + /v1/chat/completions）
       apiKey: ""                # 或用环境变量 MINIMAX_API_KEY
       envKey: "MINIMAX_API_KEY"
       baseURL: "https://api.minimaxi.com"
       model: "image-01"
-      visionModel: "MiniMax-Text-01"   # 用于读取两张参考图并生成视觉描述的多模态模型（实测可读图；不存在 MiniMax-VL-01 模型）
+      visionModel: "MiniMax-Text-01"   # 用于读取参考图并生成视觉描述的多模态模型（实测可读图；不存在 MiniMax-VL-01 模型）
 
     # Google Gemini 图像（Nano Banana 2，即 gemini-3.1-flash-image）
     gemini:
