@@ -166,7 +166,7 @@ server {
 - **前端配置**：用户可在前端「设置中心」的「试穿后端」区域填入「后端访问 Token」（与第三方模型 API Key 完全隔离独立存储）。发起请求时，前端自动在 Header 中注入 `Authorization: Bearer <token>`。
 
 ### 2. 严格的 CORS 跨域来源白名单
-- `security.trustedOrigins` 必须配置精确来源域名（如 `https://paipiange.github.io`、`http://localhost:3000`），禁止配置通配符 `*`。
+- `security.trustedOrigins` 必须配置精确来源域名（如 `https://nvzhuang.fenghuashao.top`、`http://localhost:3000`），禁止配置通配符 `*`。
 - 未授权来源发起跨域请求将直接返回 HTTP 403（业务错误码 `40301`，`ORIGIN_NOT_ALLOWED`）。
 
 ### 3. 频控限流、每日额度与并发锁定

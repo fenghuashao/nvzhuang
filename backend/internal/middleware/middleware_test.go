@@ -18,7 +18,7 @@ func TestCORSOriginValidation(t *testing.T) {
 	cfg := &security.SecurityConfig{
 		TrustedOrigins: []string{
 			"http://localhost:3000",
-			"https://paipiange.github.io",
+			"https://nvzhuang.fenghuashao.top",
 		},
 		AllowPrivateNetwork: true,
 	}
