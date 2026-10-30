@@ -24,7 +24,7 @@ type TryonReq struct {
 // ClientModelConfig 用户在浏览器设置中心保存的模型配置。
 // 该结构只在一次请求的内存中使用，不写入配置文件、数据库或日志。
 type ClientModelConfig struct {
-	Provider string `json:"provider" v:"in:openai,doubao,gemini" dc:"协议类型：openai / doubao / gemini"`
+	Provider string `json:"provider" v:"in:openai,doubao,gemini,minimax" dc:"协议类型：openai / doubao / gemini / minimax"`
 	BaseURL  string `json:"base_url" dc:"模型服务 Base URL"`
 	APIKey   string `json:"api_key" dc:"模型服务 API Key（敏感，仅本次请求使用）"`
 	Model    string `json:"model" dc:"模型服务侧真实模型名"`

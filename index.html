@@ -591,6 +591,7 @@ footer a:hover{color:#fff;text-decoration:underline}
               <option value="gemini">Google Gemini</option>
               <option value="openai">OpenAI Images 兼容</option>
               <option value="doubao">豆包 / 火山方舟</option>
+              <option value="minimax" data-i18n="settingsProviderMiniMax">MiniMax 原生协议</option>
               <option value="comfyui" data-i18n="settingsProviderComfyUI">ComfyUI 本地</option>
             </select>
           </label>
@@ -744,7 +745,7 @@ const I18N = {
     settingsBackendSection: '试穿后端', settingsBackendUrl: '后端 API 地址',
     settingsBackendHelp: '留空时使用页面预设、?tryon= 参数或本地默认地址。',
     settingsUseCustom: '使用我自己的模型配置', settingsUseCustomHelp: '启用后，本次试穿将使用下方 Base URL、API Key 与模型名。',
-    settingsProvider: '接口协议', settingsProviderComfyUI: 'ComfyUI 本地', settingsBaseHelp: '仅填写 API 根地址，不要包含模型路径、查询参数或 Key。',
+    settingsProvider: '接口协议', settingsProviderComfyUI: 'ComfyUI 本地', settingsProviderMiniMax: 'MiniMax 原生协议', settingsBaseHelp: '仅填写 API 根地址，不要包含模型路径、查询参数或 Key。',
     settingsModel: '模型名', settingsShowKey: '显示', settingsHideKey: '隐藏',
     settingsPrivacy: '隐私说明：配置只保存在当前浏览器。启用个人配置时，Key 与 Base URL 会随本次请求发送给你填写的试穿后端；后端只在内存中临时使用，不写数据库、配置文件或日志。共享设备使用后请清除。',
     settingsComfyPrivacy: '隐私说明：ComfyUI 模式只向你填写的本机换装后端发送人物图和服装图；固定工作流地址与节点由本机后端管理，不会发送 API Key，也不会把本机模型路径写入浏览器记录。',
@@ -857,7 +858,7 @@ const I18N = {
     settingsBackendSection: 'Try-on backend', settingsBackendUrl: 'Backend API URL',
     settingsBackendHelp: 'Leave blank to use the page preset, ?tryon= parameter, or local default.',
     settingsUseCustom: 'Use my own model configuration', settingsUseCustomHelp: 'Use the Base URL, API key, and model below for try-on requests.',
-    settingsProvider: 'API protocol', settingsProviderComfyUI: 'Local ComfyUI', settingsBaseHelp: 'Enter only the API root URL, without model paths, query parameters, or keys.',
+    settingsProvider: 'API protocol', settingsProviderComfyUI: 'Local ComfyUI', settingsProviderMiniMax: 'MiniMax native protocol', settingsBaseHelp: 'Enter only the API root URL, without model paths, query parameters, or keys.',
     settingsModel: 'Model name', settingsShowKey: 'Show', settingsHideKey: 'Hide',
     settingsPrivacy: 'Privacy: Settings stay in this browser. When personal configuration is enabled, the key and Base URL are sent to your selected try-on backend for that request only. The backend uses them in memory and does not write them to a database, config file, or logs. Clear them after use on a shared device.',
     settingsComfyPrivacy: 'Privacy: ComfyUI mode sends the person and garment images only to the local try-on backend you configured. The fixed workflow and model paths stay under local backend control; no API key or local model path is stored in browser history.',
@@ -1163,6 +1164,7 @@ $('#mimg').addEventListener('touchend',e=>{if(tx===null)return;const dx=e.change
     gemini: {baseUrl:'https://generativelanguage.googleapis.com/v1beta', model:'gemini-3.1-flash-image'},
     openai: {baseUrl:'https://api.openai.com/v1', model:'gpt-image-2'},
     doubao: {baseUrl:'https://ark.cn-beijing.volces.com/api/v3', model:'doubao-seedream-3-0-t2i-250415'},
+    minimax: {baseUrl:'https://api.minimaxi.com', model:'image-01'},
     comfyui: {baseUrl:'http://127.0.0.1:8188', model:'qwen-image-edit-2511'}
   };
   const settingsEl = document.getElementById('aiSettings');
