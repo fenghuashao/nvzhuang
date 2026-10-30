@@ -1,8 +1,14 @@
 package tryon
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -301,4 +307,189 @@ func extractGarmentDescription(prompt string) string {
 		rest = rest[:nl]
 	}
 	return strings.TrimSpace(rest)
+}
+
+// TestIsSensitiveInputError 验证能识别 MiniMax 1026 输入侧内容审核错误，
+// 且不会把其他错误误判成审核错误（否则会走错降级路径）。
+func TestIsSensitiveInputError(t *testing.T) {
+	sensitive := []error{
+		fmt.Errorf("MiniMax API 错误: input new_sensitive"),
+		fmt.Errorf("MiniMax API 错误: INPUT NEW_SENSITIVE"),
+		fmt.Errorf("status_code 1026"),
+	}
+	for _, err := range sensitive {
+		if !isSensitiveInputError(err) {
+			t.Errorf("expected sensitive-input error for %v", err)
+		}
+	}
+	others := []error{
+		nil,
+		fmt.Errorf("无法连接模型服务"),
+		fmt.Errorf("MiniMax API 错误: invalid params, image_reference must be one"),
+		fmt.Errorf("MiniMax API 错误: insufficient balance"),
+	}
+	for _, err := range others {
+		if isSensitiveInputError(err) {
+			t.Errorf("must not treat as sensitive-input error: %v", err)
+		}
+	}
+}
+
+// TestCropTopRatio 验证裁剪只保留顶部指定比例，且对 WebP/JPEG/PNG 都能解码。
+func TestCropTopRatio(t *testing.T) {
+	// 构造一张 100x200 的红色 PNG。
+	img := image.NewRGBA(image.Rect(0, 0, 100, 200))
+	for y := 0; y < 200; y++ {
+		for x := 0; x < 100; x++ {
+			img.Set(x, y, color.RGBA{R: 255, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	src := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	cropped, err := cropTopRatio(src, 0.5)
+	if err != nil {
+		t.Fatalf("cropTopRatio returned error: %v", err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(cropped)
+	if err != nil {
+		t.Fatalf("cropped is not valid base64: %v", err)
+	}
+	ci, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("cropped is not a decodable image: %v", err)
+	}
+	b := ci.Bounds()
+	if b.Dx() != 100 || b.Dy() != 100 {
+		t.Errorf("expected 100x100 crop, got %dx%d", b.Dx(), b.Dy())
+	}
+
+	// 非法比例必须报错而不是 panic。
+	if _, err := cropTopRatio(src, 0); err == nil {
+		t.Error("expected error for ratio 0")
+	}
+	if _, err := cropTopRatio(src, 1.5); err == nil {
+		t.Error("expected error for ratio > 1")
+	}
+	// 非法 base64 必须报错。
+	if _, err := cropTopRatio("!!!not-base64!!!", 0.5); err == nil {
+		t.Error("expected error for invalid base64")
+	}
+}
+
+// TestMiniMaxFallsBackWhenSubjectRejected 验证参考图被内容审核拦截时的降级链路：
+// 原图 → 裁剪头部重试 → 纯文生图。
+// 必须最终出图，而不是把 1026 直接抛给用户。
+func TestMiniMaxFallsBackWhenSubjectRejected(t *testing.T) {
+	var mu sync.Mutex
+	var reqs []minimaxImageRequest
+	// 记录是否已经用过「完整人像」。第一次带完整人像 -> 拒绝；
+	// 后续（裁剪后的或不带图的）-> 放行。
+	rejected := false
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"The outfit consists of a red coat."}}]}`))
+			return
+		}
+		var body minimaxImageRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		reqs = append(reqs, body)
+		first := !rejected && len(body.SubjectRef) > 0
+		if first {
+			rejected = true
+		}
+		mu.Unlock()
+
+		if first {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"base_resp":{"status_code":1026,"status_msg":"input new_sensitive"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"image_base64":["aW1hZ2U="]},"base_resp":{"status_code":0,"status_msg":"success"}}`))
+	}))
+	defer server.Close()
+
+	gen := NewMiniMax(&ModelConfig{
+		Name:    "minimax",
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Model:   "image-01",
+	})
+
+	// 构造一张 200x400 的 PNG 作为人像。
+	img := image.NewRGBA(image.Rect(0, 0, 200, 400))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode failed: %v", err)
+	}
+	big := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	result, err := gen.Generate(context.Background(), big, testPNGBase64, "orig prompt", "1024x1536")
+	if err != nil {
+		t.Fatalf("Generate must fall back instead of failing, got: %v", err)
+	}
+	if result != "aW1hZ2U=" {
+		t.Fatalf("unexpected image result: %q", result)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reqs) < 2 {
+		t.Fatalf("expected at least 2 image calls (original + fallback), got %d", len(reqs))
+	}
+	// 第一次必须带参考图。
+	if len(reqs[0].SubjectRef) != 1 {
+		t.Errorf("first call must carry subject_reference")
+	}
+	// 后续调用不得再发送原图（那会重复被拒）。
+	for i, rq := range reqs[1:] {
+		if len(rq.SubjectRef) > 0 && len(rq.SubjectRef[0].ImageFile) == len(reqs[0].SubjectRef[0].ImageFile) &&
+			rq.SubjectRef[0].ImageFile == reqs[0].SubjectRef[0].ImageFile {
+			t.Errorf("call %d must not resend the rejected original image", i+2)
+		}
+	}
+}
+
+// TestMiniMaxDoesNotFallbackOnOtherErrors 验证非审核类错误不做降级，
+// 直接返回错误（避免无意义的重试放大延迟）。
+func TestMiniMaxDoesNotFallbackOnOtherErrors(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"The outfit consists of a red coat."}}]}`))
+			return
+		}
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"base_resp":{"status_code":2013,"status_msg":"invalid params"}}`))
+	}))
+	defer server.Close()
+
+	gen := NewMiniMax(&ModelConfig{
+		Name:    "minimax",
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Model:   "image-01",
+	})
+
+	if _, err := gen.Generate(context.Background(), testPNGBase64, testPNGBase64, "p", "1024x1536"); err == nil {
+		t.Fatal("expected error for non-sensitivity failure")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected exactly 1 image call (no fallback), got %d", calls)
+	}
 }

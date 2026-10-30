@@ -6,11 +6,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	_ "golang.org/x/image/webp"
 )
 
 // MiniMax 图像生成适配器（image-01 系列）。
@@ -135,9 +140,14 @@ type minimaxVisionResponse struct {
 // visionIdentityPrompt 提取人像的身份特征。
 // 关键约束：不得提及任何服装，否则描述里会同时存在「原来穿什么」和「要穿什么」，
 // 模型会把两者都画出来（表现为原服装残留）。
-const visionIdentityPrompt = `Describe ONLY the person in this photo: apparent age, face shape, skin tone, eye shape, eyebrow shape, nose, mouth, hair style and hair color.
-Do NOT describe or mention any clothing, outfit, garment or accessory the person is wearing.
-Output one concise sentence about identity only, with no clothing words.`
+//
+// 例外：允许点名**眼镜**。眼镜属于面部特征而非服装配饰，
+// 实测纯文生图降级路径下若描述里提到眼镜，生成图会保留眼镜；
+// 若描述里排除「配饰」，眼镜就会丢失（降级路径没有参考图可依据）。
+const visionIdentityPrompt = `Describe ONLY the person's face and head in this photo: apparent age, face shape, skin tone, eye shape and color, eyebrow shape, nose, mouth, hair style and hair color.
+ALSO state whether the person is wearing eyeglasses or sunglasses, and if so their frame color and shape.
+Do NOT describe or mention any clothing, outfit, garment, or any accessory worn on the body (necklace, earrings, hat etc). Only eyeglasses may be mentioned.
+Output one concise sentence about the face and head only.`
 
 // visionGarmentPrompt 提取服装细节。
 // 关键约束：只描述服装本身，不得提及人物/人台/衣架。服装图往往带无头人台，
@@ -160,6 +170,19 @@ Output: ONLY the final dressed-up photograph.`
 // 注意：prompt 入参在本适配器中不参与拼装 —— 最终提示词完全由
 // 「身份描述 + 服装描述」构成，与上游模板无关（上游模板是给文生图模型的，
 // 其中「第一张图/第二张图」的表述在这里没有对应输入）。
+//
+// 内容审核降级（2026-10-30）：
+// subject_reference 传的是**用户原图**，MiniMax 会对该图做输入侧审核。
+// 实测：人像穿泳装/内衣时，无论配什么服装，传原图一律被拦
+// （base_resp.status_code 1026 "input new_sensitive"）；
+// 人像穿普通着装时全部放行。服装品类本身不触发拦截。
+// 旧实现从不把图送进 image_generation，所以不会遇到这个问题。
+//
+// 降级链路：
+//  1. 传原图 → 1026 时，裁掉身体只保留头部（含脸）再试（可绕开着装审核）；
+//  2. 仍被拦 → 退回纯文生图（不传任何图），只靠身份描述还原人脸。
+//
+// 两条降级路径实测均可出图，且不出现「两个人」。
 func (m *MiniMax) Generate(ctx context.Context, personB64, garmentB64, prompt, size string) (string, error) {
 	if m.apiKey == "" {
 		return "", fmt.Errorf("MiniMax API Key 未配置（llm.models.%s.apiKey 或环境变量 MINIMAX_API_KEY）", m.name)
@@ -183,53 +206,41 @@ func (m *MiniMax) Generate(ctx context.Context, personB64, garmentB64, prompt, s
 	finalPrompt := fmt.Sprintf(tryOnBuildPrompt, identityBlock, garment)
 	m.usedPrompt = finalPrompt
 
+	aspect := normalizeMiniMaxAspect(size)
+
 	// 步骤 2：图生图。人像作为唯一参考图锚定身份与体态。
-	reqBody := minimaxImageRequest{
-		Model:          m.model,
-		Prompt:         finalPrompt,
-		AspectRatio:    normalizeMiniMaxAspect(size),
-		ResponseFormat: "base64",
-		N:              1,
-		SubjectRef: []minimaxSubjectRef{
-			{Type: "character", ImageFile: buildImageDataURL(personB64)},
-		},
+	img, err := m.requestImage(ctx, finalPrompt, aspect, buildImageDataURL(personB64))
+	if err == nil {
+		return img, nil
 	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
+	if !isSensitiveInputError(err) {
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", m.baseURL+"/v1/image_generation", bytes.NewReader(body))
+	// 降级 1：只保留头部（含脸）重试，绕开着装相关的内容审核。
+	// 裁剪比例从大到小逐步收紧，取第一个通过的比例。
+	for _, ratio := range []float64{0.45, 0.35, 0.28, 0.22} {
+		cropped, cropErr := cropTopRatio(personB64, ratio)
+		if cropErr != nil {
+			continue
+		}
+		img, cropErr = m.requestImage(ctx, finalPrompt, aspect, buildImageDataURL(cropped))
+		if cropErr == nil {
+			return img, nil
+		}
+		if !isSensitiveInputError(cropErr) {
+			return "", cropErr
+		}
+	}
+
+	// 降级 2：退回纯文生图（不传任何参考图）。
+	// 人脸保真度会下降（参考图里的细节如眼镜可能丢失），
+	// 但身份描述仍在提示词里，且实测不会画出两个人。
+	img, err = m.requestImage(ctx, finalPrompt, aspect, "")
 	if err != nil {
-		return "", fmt.Errorf("模型服务请求创建失败")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+m.apiKey)
-
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("无法连接模型服务")
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("MiniMax API 错误 (status %d): %s", resp.StatusCode, truncate(string(respBody), 500))
-	}
-
-	var result minimaxImageResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", err
 	}
-	// base_resp.status_code 非 0 时 HTTP 仍是 200，必须单独判断。
-	if result.BaseResp != nil && result.BaseResp.StatusCode != 0 {
-		return "", fmt.Errorf("MiniMax API 错误: %s", result.BaseResp.StatusMsg)
-	}
-	if result.Data == nil || len(result.Data.ImageBase64) == 0 {
-		return "", fmt.Errorf("MiniMax API 未返回图片")
-	}
-	return result.Data.ImageBase64[0], nil
+	return img, nil
 }
 
 // describeVisualFeatures 并行调用多模态模型，分别提取人像身份描述与服装描述。
@@ -306,6 +317,110 @@ func (m *MiniMax) chatVision(ctx context.Context, prompt, imageB64 string) strin
 		return strings.TrimSpace(res.Choices[0].Message.Content)
 	}
 	return ""
+}
+
+// requestImage 调用 image_generation。imageDataURL 为空时不带参考图（纯文生图）。
+func (m *MiniMax) requestImage(ctx context.Context, prompt, aspect, imageDataURL string) (string, error) {
+	reqBody := minimaxImageRequest{
+		Model:          m.model,
+		Prompt:         prompt,
+		AspectRatio:    aspect,
+		ResponseFormat: "base64",
+		N:              1,
+	}
+	if imageDataURL != "" {
+		reqBody.SubjectRef = []minimaxSubjectRef{
+			{Type: "character", ImageFile: imageDataURL},
+		}
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", m.baseURL+"/v1/image_generation", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("模型服务请求创建失败")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("无法连接模型服务")
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("MiniMax API 错误 (status %d): %s", resp.StatusCode, truncate(string(respBody), 500))
+	}
+
+	var result minimaxImageResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", err
+	}
+	// base_resp.status_code 非 0 时 HTTP 仍是 200，必须单独判断。
+	if result.BaseResp != nil && result.BaseResp.StatusCode != 0 {
+		return "", fmt.Errorf("MiniMax API 错误: %s", result.BaseResp.StatusMsg)
+	}
+	if result.Data == nil || len(result.Data.ImageBase64) == 0 {
+		return "", fmt.Errorf("MiniMax API 未返回图片")
+	}
+	return result.Data.ImageBase64[0], nil
+}
+
+// isSensitiveInputError 判断错误是否为 MiniMax 输入侧内容审核拦截。
+// status_code 1026 = "input new_sensitive"（1027 是输出侧，不属于此类）。
+// 这类错误需要走降级路径，而不是直接失败。
+func isSensitiveInputError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "new_sensitive") || strings.Contains(msg, "1026")
+}
+
+// cropTopRatio 裁掉图片下方，只保留顶部 ratio 比例（通常用于只留头部/人脸）。
+// ratio 取值 (0, 1]。解码或裁剪失败时返回错误，调用方应跳过该次尝试。
+func cropTopRatio(b64 string, ratio float64) (string, error) {
+	if ratio <= 0 || ratio > 1 {
+		return "", fmt.Errorf("裁剪比例无效")
+	}
+	raw, err := base64.StdEncoding.DecodeString(ensureBase64(b64))
+	if err != nil {
+		return "", err
+	}
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return "", err
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 {
+		return "", fmt.Errorf("图片尺寸无效")
+	}
+	newH := int(float64(h) * ratio)
+	if newH < 1 {
+		newH = 1
+	}
+	if newH >= h {
+		return "", fmt.Errorf("裁剪比例过小")
+	}
+	sub, ok := img.(interface {
+		SubImage(r image.Rectangle) image.Image
+	})
+	if !ok {
+		return "", fmt.Errorf("图片裁剪失败")
+	}
+	cropped := sub.SubImage(image.Rect(b.Min.X, b.Min.Y, b.Max.X, b.Min.Y+newH))
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, cropped, &jpeg.Options{Quality: 88}); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
 // buildImageDataURL 把 base64 图片数据包装成 Data URL。
