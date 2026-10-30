@@ -725,7 +725,7 @@ const I18N = {
     aiGenerate: '开始 AI 换装', aiGenerating: '生成中…', aiNeedPhoto: '请先上传你的照片',
     aiNeedGarment: '请先在「选择一件服装」里点选一件衣服', aiNeedBoth: '请先上传照片并选择服装',
     aiFailed: '换装失败，请稍后重试', aiServerErr: '无法连接换装服务，请确认后端已部署并配置',
-    serviceDialogTitle: '无法连接换装服务', serviceDialogMessage: '请在设置中心填写正确的后端 API 地址，或检查换装后端是否已经启动。',
+    serviceDialogTitle: '无法连接换装服务', serviceDialogMessage: '请在设置中心填写正确的后端 API 地址，或检查换装后端是否已经启动。注意：HTTPS 页面无法直连 http:// 开头的后端地址，浏览器会以 Mixed Content 拦截，请使用同源的 https 地址。',
     serviceDialogCancel: '暂不设置', serviceDialogSettings: '前往设置',
     aiResult: '换装完成', aiDownload: '下载结果图', aiRegenerate: '重新生成',
     aiResultNone: '生成结果会显示在这里',
@@ -838,7 +838,7 @@ const I18N = {
     aiGenerate: 'Start AI try-on', aiGenerating: 'Generating…', aiNeedPhoto: 'Upload your photo first',
     aiNeedGarment: 'Pick a garment from the "Choose a garment" list first', aiNeedBoth: 'Upload a photo and pick a garment first',
     aiFailed: 'Try-on failed, please retry', aiServerErr: 'Cannot reach try-on service — make sure the backend is deployed and configured',
-    serviceDialogTitle: 'Cannot reach the try-on service', serviceDialogMessage: 'Enter the correct backend API URL in Settings, or check that the try-on backend is running.',
+    serviceDialogTitle: 'Cannot reach the try-on service', serviceDialogMessage: 'Enter the correct backend API URL in Settings, or check that the try-on backend is running. Note: an HTTPS page cannot call an http:// backend — the browser blocks it as Mixed Content. Use a same-origin https URL.',
     serviceDialogCancel: 'Not now', serviceDialogSettings: 'Open Settings',
     aiResult: 'Done', aiDownload: 'Download result', aiRegenerate: 'Regenerate',
     aiResultNone: 'The result will appear here',
@@ -1791,6 +1791,9 @@ $('#mimg').addEventListener('touchend',e=>{if(tx===null)return;const dx=e.change
     const p = new URLSearchParams(location.search).get('tryon');
     if(p) return p.replace(/\/+$/,'');
     if(location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') return 'http://127.0.0.1:8000';
+    // 线上默认走同源的 /api 代理（Cloudflare Pages Functions）。HTTPS 页面不能直连
+    // http:// 后端，浏览器会以 Mixed Content 拦截，表现为「无法连接换装服务」。
+    if(location.protocol === 'https:' && location.hostname.endsWith('fenghuashao.top')) return location.origin + '/api';
     return '';  // 空 = 未配置，点击时提示
   })();
   const getAIAPI = () => tryonSettings.backendUrl || ((tryonSettings.useCustom && tryonSettings.provider === 'comfyui') ? 'http://127.0.0.1:8000' : DEFAULT_AI_API);
