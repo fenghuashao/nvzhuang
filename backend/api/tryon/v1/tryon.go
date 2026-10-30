@@ -36,6 +36,12 @@ type TryonRes struct {
 	Model string `json:"model" dc:"实际使用的模型"`
 	// 提示词（调试用，可空）
 	Prompt string `json:"prompt,omitempty" dc:"实际使用的提示词"`
+	// 生成路径。用于说明结果是如何产生的：
+	//   reference —— 正常路径，带参考图；
+	//   reference_cropped —— 参考图被内容审核拦下，裁掉身体只留头部后重试成功；
+	//   text_only —— 参考图与头部裁剪都被拦，退回纯文生图（人脸保真度较低）。
+	// 为空表示未提供该信息（其他适配器）。
+	Mode string `json:"mode,omitempty" dc:"生成路径：reference / reference_cropped / text_only"`
 }
 
 type ComfyUIHealthReq struct {

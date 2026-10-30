@@ -27,6 +27,13 @@ type PromptReporter interface {
 	UsedPrompt() string
 }
 
+// ModeReporter 可选接口：适配器若能说明本次实际走的生成路径，则实现它。
+// 用于把「结果是否走了降级」这件事暴露给调用方，而不是静默发生。
+type ModeReporter interface {
+	// Mode 返回生成路径标识（如 reference / reference_cropped / text_only）
+	Mode() string
+}
+
 // ModelConfig 单个模型的配置项
 type ModelConfig struct {
 	Name     string // 模型别名（前端请求用），如 gpt-image / doubao / gemini

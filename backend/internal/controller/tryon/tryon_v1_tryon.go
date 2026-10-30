@@ -67,7 +67,7 @@ func (c *ControllerV1) Tryon(ctx context.Context, req *v1.TryonReq) (res *v1.Try
 		}
 	}
 
-	imageB64, model, prompt, err := tryon.DoTryonWithValidatedImages(
+	imageB64, model, prompt, mode, err := tryon.DoTryonWithValidatedImagesMode(
 		ctx,
 		personImg,
 		garmentImg,
@@ -83,6 +83,7 @@ func (c *ControllerV1) Tryon(ctx context.Context, req *v1.TryonReq) (res *v1.Try
 		Image:  imageB64,
 		Model:  model,
 		Prompt: prompt,
+		Mode:   mode,
 	}, nil
 }
 

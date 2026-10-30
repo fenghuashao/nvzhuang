@@ -493,3 +493,106 @@ func TestMiniMaxDoesNotFallbackOnOtherErrors(t *testing.T) {
 		t.Fatalf("expected exactly 1 image call (no fallback), got %d", calls)
 	}
 }
+
+// TestMiniMaxReportsMode 验证 mode 正确反映实际走的生成路径。
+// 这是「结果是不是降级出来的」这个问题的唯一权威来源 ——
+// 之前降级是静默发生的，用户看到成功结果却无从判断它是哪条路径产出的。
+func TestMiniMaxReportsMode(t *testing.T) {
+	visionOK := `{"choices":[{"message":{"content":"adult woman, oval face, dark hair"}}]}`
+	okImage := `{"data":{"image_base64":["aW1hZ2U="]},"base_resp":{"status_code":0,"status_msg":"success"}}`
+
+	// 构造一张可裁剪的 PNG（1x1 的图裁不出头部，裁剪会失败）。
+	croppable := func() string {
+		img := image.NewRGBA(image.Rect(0, 0, 200, 400))
+		for y := 0; y < 400; y++ {
+			for x := 0; x < 200; x++ {
+				img.Set(x, y, color.RGBA{R: 200, G: 150, B: 120, A: 255})
+			}
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			t.Fatalf("encode failed: %v", err)
+		}
+		return base64.StdEncoding.EncodeToString(buf.Bytes())
+	}()
+
+	// 场景 1：正常路径 —— 第一次图生图即通过
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req minimaxImageRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Model == "MiniMax-Text-01" {
+			_, _ = w.Write([]byte(visionOK))
+			return
+		}
+		_, _ = w.Write([]byte(okImage))
+	}))
+	defer srv1.Close()
+
+	m1 := NewMiniMax(&ModelConfig{Name: "minimax", APIKey: "k", BaseURL: srv1.URL, Model: "image-01"})
+	if _, err := m1.Generate(context.Background(), croppable, testPNGBase64, "p", "1024x1536"); err != nil {
+		t.Fatalf("场景1 生成失败: %v", err)
+	}
+	if got := m1.Mode(); got != "reference" {
+		t.Errorf("场景1 mode 应为 reference，实际为 %q", got)
+	}
+
+	// 场景 2：裁剪路径 —— 第一���（完整人像）被 1026 拦，裁剪后的头部放行
+	var mu2 sync.Mutex
+	imageCalls2 := 0
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req minimaxImageRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Model == "MiniMax-Text-01" {
+			_, _ = w.Write([]byte(visionOK))
+			return
+		}
+		mu2.Lock()
+		imageCalls2++
+		n := imageCalls2
+		mu2.Unlock()
+		if n == 1 {
+			_, _ = w.Write([]byte(`{"base_resp":{"status_code":1026,"status_msg":"input new_sensitive"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(okImage))
+	}))
+	defer srv2.Close()
+
+	m2 := NewMiniMax(&ModelConfig{Name: "minimax", APIKey: "k", BaseURL: srv2.URL, Model: "image-01"})
+	if _, err := m2.Generate(context.Background(), croppable, testPNGBase64, "p", "1024x1536"); err != nil {
+		t.Fatalf("场景2 生成失败: %v", err)
+	}
+	if got := m2.Mode(); got != "reference_cropped" {
+		t.Errorf("场景2 mode 应为 reference_cropped，实际为 %q", got)
+	}
+	mu2.Lock()
+	defer mu2.Unlock()
+	if imageCalls2 < 2 {
+		t.Errorf("场景2 应至少发起过 2 次图像请求（原图 + 裁剪图），实际 %d 次", imageCalls2)
+	}
+
+	// 场景 3：完全降级 —— 连裁剪后的头部也被拦，最终走纯文生图
+	srv3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req minimaxImageRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Model == "MiniMax-Text-01" {
+			_, _ = w.Write([]byte(visionOK))
+			return
+		}
+		// 只有完全不带图的请求放行
+		if len(req.SubjectRef) == 0 {
+			_, _ = w.Write([]byte(okImage))
+			return
+		}
+		_, _ = w.Write([]byte(`{"base_resp":{"status_code":1026,"status_msg":"input new_sensitive"}}`))
+	}))
+	defer srv3.Close()
+
+	m3 := NewMiniMax(&ModelConfig{Name: "minimax", APIKey: "k", BaseURL: srv3.URL, Model: "image-01"})
+	if _, err := m3.Generate(context.Background(), croppable, testPNGBase64, "p", "1024x1536"); err != nil {
+		t.Fatalf("场景3 生成失败: %v", err)
+	}
+	if got := m3.Mode(); got != "text_only" {
+		t.Errorf("场景3 mode 应为 text_only，实际为 %q", got)
+	}
+}

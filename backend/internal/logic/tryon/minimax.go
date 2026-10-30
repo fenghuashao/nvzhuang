@@ -53,6 +53,8 @@ type MiniMax struct {
 	// usedPrompt 记录本次实际使用的提示词。
 	// 每个请求都会新建一个适配器实例（见 NewGenerator），因此不存在并发竞争。
 	usedPrompt string
+	// mode 记录本次实际走的生成路径（见 Generate 的说明）。
+	mode string
 }
 
 func NewMiniMax(cfg *ModelConfig) *MiniMax {
@@ -77,6 +79,15 @@ func (m *MiniMax) Name() string {
 // 接口返回的 prompt 字段此前一直是拼装前的模板，与真实提示词不符，排查时极具误导性。
 func (m *MiniMax) UsedPrompt() string {
 	return m.usedPrompt
+}
+
+// Mode 返回本次实际走的生成路径：
+//
+//	reference        —— 正常路径，带完整参考图；
+//	reference_cropped —— 参考图被内容审核拦下，裁掉身体只留头部后重试成功；
+//	text_only        —— 参考图与头部裁剪都被拦，退回纯文生图（人脸保真度较低）。
+func (m *MiniMax) Mode() string {
+	return m.mode
 }
 
 // minimaxImageRequest 图生图/文生图请求体。
@@ -211,6 +222,7 @@ func (m *MiniMax) Generate(ctx context.Context, personB64, garmentB64, prompt, s
 	// 步骤 2：图生图。人像作为唯一参考图锚定身份与体态。
 	img, err := m.requestImage(ctx, finalPrompt, aspect, buildImageDataURL(personB64))
 	if err == nil {
+		m.mode = "reference"
 		return img, nil
 	}
 	if !isSensitiveInputError(err) {
@@ -226,6 +238,7 @@ func (m *MiniMax) Generate(ctx context.Context, personB64, garmentB64, prompt, s
 		}
 		img, cropErr = m.requestImage(ctx, finalPrompt, aspect, buildImageDataURL(cropped))
 		if cropErr == nil {
+			m.mode = "reference_cropped"
 			return img, nil
 		}
 		if !isSensitiveInputError(cropErr) {
@@ -240,6 +253,7 @@ func (m *MiniMax) Generate(ctx context.Context, personB64, garmentB64, prompt, s
 	if err != nil {
 		return "", err
 	}
+	m.mode = "text_only"
 	return img, nil
 }
 

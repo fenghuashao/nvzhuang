@@ -89,11 +89,20 @@ func resolveUsedPrompt(gen ImageGenerator, fallback string) string {
 
 // DoTryonWithValidatedImages 使用已完成安全校验的图片结构执行换装
 func DoTryonWithValidatedImages(ctx context.Context, personImg, garmentImg *imagevalidate.ValidatedImage, model, size, lang string, clientConfig *ModelConfig) (resultB64, usedModel, usedPrompt string, err error) {
+	resultB64, usedModel, usedPrompt, _, err = DoTryonWithValidatedImagesMode(ctx, personImg, garmentImg, model, size, lang, clientConfig)
+	return resultB64, usedModel, usedPrompt, err
+}
+
+// DoTryonWithValidatedImagesMode 与 DoTryonWithValidatedImages 相同，
+// 额外返回本次实际走的生成路径（mode）。
+// mode 用于让调用方知道结果是否走了降级路径 —— 例如 MiniMax 在参考图
+// 被内容审核拦下时会退回纯文生图，此时人脸保真度较低，需要如实告知用户。
+func DoTryonWithValidatedImagesMode(ctx context.Context, personImg, garmentImg *imagevalidate.ValidatedImage, model, size, lang string, clientConfig *ModelConfig) (resultB64, usedModel, usedPrompt, usedMode string, err error) {
 	if personImg == nil || len(personImg.Data) == 0 {
-		return "", "", "", gerror.New("人像照片不能为空")
+		return "", "", "", "", gerror.New("人像照片不能为空")
 	}
 	if garmentImg == nil || len(garmentImg.Data) == 0 {
-		return "", "", "", gerror.New("服装图不能为空")
+		return "", "", "", "", gerror.New("服装图不能为空")
 	}
 
 	personB64 := base64.StdEncoding.EncodeToString(personImg.Data)
@@ -110,7 +119,7 @@ func DoTryonWithValidatedImages(ctx context.Context, personImg, garmentImg *imag
 		gen, err = NewGenerator(ctx, model)
 	}
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 
 	var promptStr string
@@ -125,10 +134,18 @@ func DoTryonWithValidatedImages(ctx context.Context, personImg, garmentImg *imag
 
 	result, err := gen.Generate(ctx, personB64, garmentB64, promptStr, size)
 	if err != nil {
-		return "", "", "", gerror.Wrap(err, "换装生成失败，请稍后重试")
+		return "", "", "", "", gerror.Wrap(err, "换装生成失败，请稍后重试")
 	}
 
-	return result, gen.Name(), resolveUsedPrompt(gen, promptStr), nil
+	return result, gen.Name(), resolveUsedPrompt(gen, promptStr), resolveUsedMode(gen), nil
+}
+
+// resolveUsedMode 返回实际走的生成路径。未实现 ModeReporter 的适配器返回空串。
+func resolveUsedMode(gen ImageGenerator) string {
+	if reporter, ok := gen.(ModeReporter); ok {
+		return reporter.Mode()
+	}
+	return ""
 }
 
 // isGPTImageModel 判断当前请求是否使用 GPT-Image 系列模型

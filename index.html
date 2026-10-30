@@ -721,6 +721,7 @@ const I18N = {
     aiSuccessGPT: '换装完成（已使用 GPT Image 2 防封控安全模式生成并保存）',
     aiGeneratingComfy: '正在使用本机 ComfyUI 固定工作流生成，中间帧将在完成后作为结果图…',
     aiSuccessComfy: '本机 ComfyUI 生成完成，结果已保存到浏览器生成记录',
+    aiSuccessDegraded: '换装完成，但人像原图被内容审核拦截，本次使用了降级生成（仅参考头部或纯文字描述），人脸细节可能与原图略有差异',
     aiPickedNone: '未选服装 — 请在下方「选择一件服装」点选一件', aiPicked: '已选服装：',
     aiGenerate: '开始 AI 换装', aiGenerating: '生成中…', aiNeedPhoto: '请先上传你的照片',
     aiNeedGarment: '请先在「选择一件服装」里点选一件衣服', aiNeedBoth: '请先上传照片并选择服装',
@@ -834,6 +835,7 @@ const I18N = {
     aiSuccessGPT: 'Try-on complete (generated via GPT Image 2 safety mode)',
     aiGeneratingComfy: 'Generating with the fixed local ComfyUI workflow. The middle frame will be returned as the result image…',
     aiSuccessComfy: 'Local ComfyUI generation completed and was saved to browser history',
+    aiSuccessDegraded: 'Try-on complete, but your photo was blocked by content moderation — a degraded path was used (head-only reference or text-only), so facial details may differ slightly from the original',
     aiPickedNone: 'No garment picked — pick one below', aiPicked: 'Picked garment: ',
     aiGenerate: 'Start AI try-on', aiGenerating: 'Generating…', aiNeedPhoto: 'Upload your photo first',
     aiNeedGarment: 'Pick a garment from the "Choose a garment" list first', aiNeedBoth: 'Upload a photo and pick a garment first',
@@ -2121,7 +2123,15 @@ $('#mimg').addEventListener('touchend',e=>{if(tx===null)return;const dx=e.change
       aiResultImg.scrollIntoView({behavior:'smooth', block:'center'});
       try{
         await saveHistoryResult(data.data.image, data.data);
-        showHint(isGPT ? t('aiSuccessGPT') : (isComfy ? t('aiSuccessComfy') : t('historySaved')));
+        // mode 标明本次实际走的生成路径。reference 为正常路径；
+        // reference_cropped / text_only 表示参考图被内容审核拦下后走了降级，
+        // 此时人脸保真度较低，如实告知用户而不是静默降级。
+        const degraded = (data.data.mode === 'reference_cropped' || data.data.mode === 'text_only');
+        if(degraded){
+          showHint(t('aiSuccessDegraded'));
+        }else{
+          showHint(isGPT ? t('aiSuccessGPT') : (isComfy ? t('aiSuccessComfy') : t('historySaved')));
+        }
       }catch(_){
         // 本机存储失败不影响本次生成结果的查看和下载。
         showHint(t('historySaveFailed'));
